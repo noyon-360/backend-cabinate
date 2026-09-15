@@ -1,0 +1,664 @@
+{
+  "info": {
+    "name": "SnapNDesign API",
+    "description": "Full API collection for SnapNDesign Kitchen Cabinet Design & Sales SaaS",
+    "_postman_id": "snapndesign-2025",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:5000/api/v1" },
+    { "key": "access_token", "value": "" },
+    { "key": "job_id", "value": "" },
+    { "key": "product_id", "value": "" },
+    { "key": "staff_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"john@example.com\",\n  \"password\": \"123456\",\n  \"confirmPassword\": \"123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Verify Email (OTP)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/verify-email", "host": ["{{base_url}}"], "path": ["auth", "verify-email"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\",\n  \"otp\": \"123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Resend OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/resend-otp", "host": ["{{base_url}}"], "path": ["auth", "resend-otp"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.accessToken) {",
+                  "  pm.collectionVariables.set('access_token', res.data.accessToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\",\n  \"password\": \"123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/forgot-password", "host": ["{{base_url}}"], "path": ["auth", "forgot-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Verify Reset OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/verify-reset-otp", "host": ["{{base_url}}"], "path": ["auth", "verify-reset-otp"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\",\n  \"otp\": \"123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/reset-password", "host": ["{{base_url}}"], "path": ["auth", "reset-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\",\n  \"otp\": \"123456\",\n  \"password\": \"newpass123\",\n  \"confirmPassword\": \"newpass123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 User / Profile",
+      "item": [
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/user/profile", "host": ["{{base_url}}"], "path": ["user", "profile"] }
+          }
+        },
+        {
+          "name": "Update Profile (with image)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/user/profile", "host": ["{{base_url}}"], "path": ["user", "profile"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "firstName", "value": "John", "type": "text" },
+                { "key": "lastName", "value": "Doe", "type": "text" },
+                { "key": "phoneNumber", "value": "+1 555 000 0000", "type": "text" },
+                { "key": "address", "value": "42 Maple Grove, Riverside", "type": "text" },
+                { "key": "profileImage", "type": "file", "src": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/user/change-password", "host": ["{{base_url}}"], "path": ["user", "change-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"123456\",\n  \"newPassword\": \"newpass123\",\n  \"confirmPassword\": \"newpass123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update Notification Settings",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/user/notifications", "host": ["{{base_url}}"], "path": ["user", "notifications"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"push\": true,\n  \"loan\": false,\n  \"transaction\": false,\n  \"fund\": true,\n  \"support\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Account",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/user/delete-account", "host": ["{{base_url}}"], "path": ["user", "delete-account"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"I don't use the app anymore\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👥 Staff Management",
+      "item": [
+        {
+          "name": "Add Staff",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data._id) {",
+                  "  pm.collectionVariables.set('staff_id', res.data._id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff", "host": ["{{base_url}}"], "path": ["staff"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "firstName", "value": "Sarah", "type": "text" },
+                { "key": "lastName", "value": "Connor", "type": "text" },
+                { "key": "email", "value": "sarah@example.com", "type": "text" },
+                { "key": "phoneNumber", "value": "+1 555 123 4567", "type": "text" },
+                { "key": "password", "value": "staff123", "type": "text" },
+                { "key": "profileImage", "type": "file", "src": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get All Staff",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/staff?search=&status=",
+              "host": ["{{base_url}}"],
+              "path": ["staff"],
+              "query": [
+                { "key": "search", "value": "" },
+                { "key": "status", "value": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Staff Stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff/stats", "host": ["{{base_url}}"], "path": ["staff", "stats"] }
+          }
+        },
+        {
+          "name": "Get Single Staff",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff/{{staff_id}}", "host": ["{{base_url}}"], "path": ["staff", "{{staff_id}}"] }
+          }
+        },
+        {
+          "name": "Toggle Staff Status (Active/Suspend)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff/{{staff_id}}/toggle-status", "host": ["{{base_url}}"], "path": ["staff", "{{staff_id}}", "toggle-status"] }
+          }
+        },
+        {
+          "name": "Update Staff",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff/{{staff_id}}", "host": ["{{base_url}}"], "path": ["staff", "{{staff_id}}"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "firstName", "value": "Sarah Updated", "type": "text" },
+                { "key": "phoneNumber", "value": "+1 555 999 0000", "type": "text" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Staff",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/staff/{{staff_id}}", "host": ["{{base_url}}"], "path": ["staff", "{{staff_id}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🗂️ Product Catalog",
+      "item": [
+        {
+          "name": "Get All Products (Mobile Catalog)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/products?search=&category=All&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["products"],
+              "query": [
+                { "key": "search", "value": "" },
+                { "key": "category", "value": "All" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Admin Catalog (Web Table)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/products/admin-catalog?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["products", "admin-catalog"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Categories",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/products/categories", "host": ["{{base_url}}"], "path": ["products", "categories"] }
+          }
+        },
+        {
+          "name": "Get Single Product",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/products/{{product_id}}", "host": ["{{base_url}}"], "path": ["products", "{{product_id}}"] }
+          }
+        },
+        {
+          "name": "Create Product (with images)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data._id) {",
+                  "  pm.collectionVariables.set('product_id', res.data._id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/products", "host": ["{{base_url}}"], "path": ["products"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "sku", "value": "BC-900-W", "type": "text" },
+                { "key": "name", "value": "Base Cabinet 900", "type": "text" },
+                { "key": "category", "value": "Base", "type": "text" },
+                { "key": "finish", "value": "White Shaker", "type": "text" },
+                { "key": "width", "value": "900", "type": "text" },
+                { "key": "height", "value": "870", "type": "text" },
+                { "key": "depth", "value": "580", "type": "text" },
+                { "key": "price", "value": "275", "type": "text" },
+                { "key": "description", "value": "900W × 580D mm", "type": "text" },
+                { "key": "images", "type": "file", "src": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/products/{{product_id}}", "host": ["{{base_url}}"], "path": ["products", "{{product_id}}"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "price", "value": "295", "type": "text" },
+                { "key": "isActive", "value": "true", "type": "text" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Product",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/products/{{product_id}}", "host": ["{{base_url}}"], "path": ["products", "{{product_id}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💼 Jobs",
+      "item": [
+        {
+          "name": "Get Dashboard Stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/jobs/dashboard", "host": ["{{base_url}}"], "path": ["jobs", "dashboard"] }
+          }
+        },
+        {
+          "name": "Get All Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/jobs?status=All&search=&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["jobs"],
+              "query": [
+                { "key": "status", "value": "All" },
+                { "key": "search", "value": "" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Step 1 — Create Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data._id) {",
+                  "  pm.collectionVariables.set('job_id', res.data._id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs", "host": ["{{base_url}}"], "path": ["jobs"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-08-22\",\n  \"customerName\": \"Sarah Johnson\",\n  \"propertyAddress\": \"42 Maple Grove, Riverside\",\n  \"phoneNumber\": \"+(555) 000-0000\",\n  \"emailAddress\": \"customer@gmail.com\",\n  \"notes\": \"Renovation — existing layout to be retained if possible\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Single Job",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}"] }
+          }
+        },
+        {
+          "name": "Update Job Details",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"notes\": \"Updated notes here\",\n  \"status\": \"In Progress\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 2 — Save Room Capture",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/room-capture", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "room-capture"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"Room Scan\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 3 — Save Measurements",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/measurements", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "measurements"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"width\": 5.3,\n  \"depth\": 6.5,\n  \"height\": 8.2\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 4 — Select Products",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/products", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"products\": [\n    { \"productId\": \"{{product_id}}\", \"quantity\": 1 }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 5 — Generate AI Layout",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/ai-layout", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "ai-layout"] }
+          }
+        },
+        {
+          "name": "Step 6 — Save Design (optional image)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/design", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "design"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "layoutName", "value": "Layout A — Recommended", "type": "text" },
+                { "key": "layoutImage", "type": "file", "src": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Step 7 — Save Estimate",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/estimate", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "estimate"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"installationCharge\": 100,\n  \"deliveryCharge\": 100,\n  \"taxRate\": 10\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 8 — Generate Proposal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}/proposal", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}", "proposal"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"terms\": \"50% deposit required upon acceptance. Balance due on installation completion. Price includes supply and installation of all listed cabinets. Valid for 30 days from date of issue.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Add Product to Job (from Catalog Screen)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/jobs/add-product", "host": ["{{base_url}}"], "path": ["jobs", "add-product"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jobId\": \"{{job_id}}\",\n  \"productId\": \"{{product_id}}\",\n  \"quantity\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Job",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["jobs", "{{job_id}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📩 Support / Contact Us",
+      "item": [
+        {
+          "name": "Submit Contact Us",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base_url}}/support", "host": ["{{base_url}}"], "path": ["support"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"John Doe\",\n  \"email\": \"john@example.com\",\n  \"contactNumber\": \"+1 555 000 0000\",\n  \"note\": \"I need help with my account settings.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get All Support Messages (Owner)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/support?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["support"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Mark Support Message as Resolved",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/support/:id/resolve", "host": ["{{base_url}}"], "path": ["support", ":id", "resolve"] }
+          }
+        }
+      ]
+    }
+  ]
+}
