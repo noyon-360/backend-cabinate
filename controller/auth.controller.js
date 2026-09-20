@@ -9,9 +9,9 @@ import { sendEmail, otpEmailTemplate } from "../utils/sendEmail.js";
 
 // ─── REGISTER ───────────────────────────────────────────────────────────────
 export const register = catchAsync(async (req, res) => {
-  const { firstName, lastName, email, password, confirmPassword } = req.body;
+  const {email, password, confirmPassword } = req.body;
 
-  if (!firstName || !lastName || !email || !password || !confirmPassword) {
+  if (!email || !password || !confirmPassword) {
     throw new AppError(httpStatus.BAD_REQUEST, "All fields are required");
   }
 
@@ -32,11 +32,9 @@ export const register = catchAsync(async (req, res) => {
   }
 
   const user = await User.create({
-    firstName: firstName.trim(),
-    lastName: lastName.trim(),
     email: email.toLowerCase().trim(),
     password,
-    role: "owner",
+    role: "staff",
   });
 
   const otp = generateOTP();
@@ -55,7 +53,7 @@ export const register = catchAsync(async (req, res) => {
     message: "Registered successfully. Check your email for the OTP.",
     data: {
       email: user.email,
-      otp, // dev only — remove in production
+      // otp, // dev only — remove in production
     },
   });
 });
@@ -120,7 +118,7 @@ export const resendOTP = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "New OTP sent to your email",
-    data: { otp }, // dev only
+    // data: { otp }, // dev only
   });
 });
 
@@ -143,7 +141,7 @@ export const login = catchAsync(async (req, res) => {
   if (!user.isEmailVerified) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      "Email not verified. Please verify your email first."
+      "Email not verified. Please verify your email first." // This message is being used as a condition in the mobile app.
     );
   }
 
@@ -181,8 +179,8 @@ export const login = catchAsync(async (req, res) => {
     message: "Login successful",
     data: {
       _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
+      firstName: user.firstName ?? '',
+      lastName: user.lastName ?? '',
       email: user.email,
       phoneNumber: user.phoneNumber,
       address: user.address,

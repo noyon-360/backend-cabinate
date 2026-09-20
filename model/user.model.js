@@ -5,13 +5,13 @@ const userSchema = new Schema(
   {
     firstName: {
       type: String,
-      required: [true, "First name is required"],
+      // required: [true, "First name is required"],
       trim: true,
     },
 
     lastName: {
       type: String,
-      required: [true, "Last name is required"],
+      // required: [true, "Last name is required"],
       trim: true,
     },
 
@@ -51,7 +51,7 @@ const userSchema = new Schema(
     role: {
       type: String,
       enum: ["owner", "staff"],
-      default: "owner",
+      default: "staff",
     },
 
     // staff is linked to an owner
