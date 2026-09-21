@@ -84,6 +84,11 @@ export const changePassword = catchAsync(async (req, res) => {
   if (!currentPassword || !newPassword || !confirmPassword) {
     throw new AppError(httpStatus.BAD_REQUEST, "All fields are required");
   }
+  
+  if(currentPassword === newPassword) {
+    throw new AppError(httpStatus.BAD_REQUEST, "New password must be different from current password");
+  }
+
 
   if (newPassword !== confirmPassword) {
     throw new AppError(httpStatus.BAD_REQUEST, "Passwords do not match");
