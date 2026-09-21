@@ -26,15 +26,20 @@ export const getProfile = catchAsync(async (req, res) => {
 // ─── SETUP / UPDATE PROFILE ───────────────────────────────────────────────────
 // Used for: Screen 6 (Profile Setup) and Screen 22 (Edit Profile)
 export const updateProfile = catchAsync(async (req, res) => {
-  const { firstName, lastName, phoneNumber, address } = req.body;
+  const { fullName, phoneNumber, address } = req.body;
   const user = await User.findById(req.user._id);
+
 
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
   }
 
-  if (firstName) user.firstName = firstName.trim();
-  if (lastName) user.lastName = lastName.trim();
+  if (typeof fullName === 'string') {
+    const nameParts = fullName.trim().split(/\s+/).filter(Boolean);
+    user.firstName = nameParts[0] || "";
+    user.lastName = nameParts.slice(1).join(" ") || "";
+  }
+
   if (phoneNumber !== undefined) user.phoneNumber = phoneNumber.trim();
   if (address !== undefined) user.address = address.trim();
 
