@@ -3,7 +3,7 @@ import AppError from "../errors/AppError.js";
 import catchAsync from "../utils/catchAsync.js";
 import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
-import { createToken } from "../utils/authToken.js";
+import { createToken, verifyToken } from "../utils/authToken.js";
 import { generateOTP } from "../utils/commonMethod.js";
 import { sendEmail, otpEmailTemplate } from "../utils/sendEmail.js";
 
@@ -34,7 +34,7 @@ export const register = catchAsync(async (req, res) => {
   const user = await User.create({
     email: email.toLowerCase().trim(),
     password,
-    role: "staff",
+    role: "owner",
   });
 
   const otp = generateOTP();
@@ -77,13 +77,42 @@ export const verifyEmail = catchAsync(async (req, res) => {
 
   user.isEmailVerified = true;
   user.clearOTP();
+
+  const payload = { _id: user._id, email: user.email, role: user.role };
+
+  const accessToken = createToken(
+    payload,
+    process.env.JWT_ACCESS_SECRET,
+    process.env.JWT_ACCESS_EXPIRES_IN
+  );
+  const refreshToken = createToken(
+    payload,
+    process.env.JWT_REFRESH_SECRET,
+    process.env.JWT_REFRESH_EXPIRES_IN
+  );
+
+  user.refreshToken = refreshToken;
   await user.save();
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Email verified successfully",
-    data: null,
+    data: {
+      _id: user._id,
+      firstName: user.firstName ?? "",
+      lastName: user.lastName ?? "",
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      address: user.address,
+      profileImage: user.profileImage,
+      role: user.role,
+      ownerId: user.ownerId,
+      isEmailVerified: user.isEmailVerified,
+      notifications: user.notifications,
+      accessToken,
+      refreshToken,
+    },
   });
 });
 
@@ -162,12 +191,12 @@ export const login = catchAsync(async (req, res) => {
   const accessToken = createToken(
     payload,
     process.env.JWT_ACCESS_SECRET,
-    "1d"
+    process.env.JWT_ACCESS_EXPIRES_IN
   );
   const refreshToken = createToken(
     payload,
     process.env.JWT_REFRESH_SECRET,
-    "7d"
+    process.env.JWT_REFRESH_EXPIRES_IN
   );
 
   user.refreshToken = refreshToken;
@@ -191,6 +220,57 @@ export const login = catchAsync(async (req, res) => {
       notifications: user.notifications,
       accessToken,
       refreshToken,
+    },
+  });
+});
+
+// ─── REFRESH TOKEN ────────────────────────────────────────────────────────────
+export const refreshToken = catchAsync(async (req, res) => {
+  const { refreshToken: incomingRefreshToken } = req.body;
+
+  if (!incomingRefreshToken) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Refresh token is required");
+  }
+
+  let decoded;
+  try {
+    decoded = verifyToken(incomingRefreshToken, process.env.JWT_REFRESH_SECRET);
+  } catch (error) {
+    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired refresh token");
+  }
+
+  const user = await User.findById(decoded._id);
+  if (!user || user.refreshToken !== incomingRefreshToken) {
+    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid refresh token");
+  }
+
+  if (user.isSuspended) {
+    throw new AppError(httpStatus.FORBIDDEN, "Your account has been suspended");
+  }
+
+  const payload = { _id: user._id, email: user.email, role: user.role };
+
+  const accessToken = createToken(
+    payload,
+    process.env.JWT_ACCESS_SECRET,
+    process.env.JWT_ACCESS_EXPIRES_IN
+  );
+  const newRefreshToken = createToken(
+    payload,
+    process.env.JWT_REFRESH_SECRET,
+    process.env.JWT_REFRESH_EXPIRES_IN
+  );
+
+  user.refreshToken = newRefreshToken;
+  await user.save();
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Token refreshed successfully",
+    data: {
+      accessToken,
+      refreshToken: newRefreshToken,
     },
   });
 });
