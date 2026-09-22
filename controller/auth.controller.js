@@ -222,7 +222,7 @@ export const forgotPassword = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "OTP sent to your email",
-    data: { email: user.email, otp }, // dev only
+    data: { email: user.email},
   });
 });
 
