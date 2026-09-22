@@ -51,7 +51,7 @@ const userSchema = new Schema(
     role: {
       type: String,
       enum: ["owner", "staff"],
-      default: "staff",
+      default: "owner",
     },
 
     // staff is linked to an owner

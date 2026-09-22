@@ -184,7 +184,7 @@ jobSchema.pre("save", function (next) {
     const random = Math.random().toString(36).substr(2, 3).toUpperCase();
     this.jobRef = `JOB-${timestamp}${random}`;
   }
-  next();
+  // next();
 });
 
 const Job = mongoose.model("Job", jobSchema);

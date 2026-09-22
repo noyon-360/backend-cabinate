@@ -34,7 +34,7 @@ export const register = catchAsync(async (req, res) => {
   const user = await User.create({
     email: email.toLowerCase().trim(),
     password,
-    role: "staff",
+    role: "owner",
   });
 
   const otp = generateOTP();
@@ -77,13 +77,42 @@ export const verifyEmail = catchAsync(async (req, res) => {
 
   user.isEmailVerified = true;
   user.clearOTP();
+
+  const payload = { _id: user._id, email: user.email, role: user.role };
+
+  const accessToken = createToken(
+    payload,
+    process.env.JWT_ACCESS_SECRET,
+    process.env.JWT_ACCESS_EXPIRES_IN
+  );
+  const refreshToken = createToken(
+    payload,
+    process.env.JWT_REFRESH_SECRET,
+    process.env.JWT_REFRESH_EXPIRES_IN
+  );
+
+  user.refreshToken = refreshToken;
   await user.save();
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Email verified successfully",
-    data: null,
+    data: {
+      _id: user._id,
+      firstName: user.firstName ?? "",
+      lastName: user.lastName ?? "",
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      address: user.address,
+      profileImage: user.profileImage,
+      role: user.role,
+      ownerId: user.ownerId,
+      isEmailVerified: user.isEmailVerified,
+      notifications: user.notifications,
+      accessToken,
+      refreshToken,
+    },
   });
 });
 
