@@ -83,7 +83,9 @@ const describe = (room, units) => {
       corner:
         w === 0
           ? null
-          : `left end meets the right end of ${wallName(w - 1)}`,
+          : room.shape === "galley"
+            ? `no corner: faces ${wallName(w - 1)} across the aisle`
+            : `left end meets the right end of ${wallName(w - 1)}`,
     })),
     units: units.map((u) => ({
       id: u.id,
