@@ -6,7 +6,8 @@
 // the checks.
 //
 // Walls run in order A → B → C. Cabinets at the end of one wall turn the
-// corner, so each later wall starts after the previous run's depth.
+// corner, so each later wall starts after the previous run's depth. A
+// galley's two walls face each other and share no corner.
 //
 // Tiers:
 //   base  floor units under the worktop
@@ -25,6 +26,7 @@ const DEFAULT_DEPTH = { base: 600, wall: 350, tall: 600 };
 const BASE_HEIGHT_MM = 900; // a window sill below this blocks base units too
 const MAX_FILLER_MM = 150; // gaps up to this get a filler panel
 const TALL_HOB_GAP_MM = 300; // heat clearance between a hob and a tall unit
+const SQUARE_TOLERANCE_DEG = 3; // corners further off 90° get a warning
 const ALL_PLACED = "All selected products placed";
 
 const TIER_OF = { Base: "base", Wall: "wall", Tall: "tall" };
@@ -45,6 +47,20 @@ const conflicts = (a, b) =>
   a.tier === b.tier || a.tier === "tall" || b.tier === "tall";
 
 const spanOf = (i) => [i.offsetMm, i.offsetMm + i.widthMm];
+const letter = (w) => String.fromCharCode(65 + w);
+const wallName = (w) => `Wall ${letter(w)}`;
+
+// Lowest ceiling along wall w; a sloped ceiling counts at its low end.
+// Mirrors RoomSpec.lowestCeilingMm in the app.
+export const lowestCeilingMm = (room, w) => {
+  const { heightMm, heightEndMm } = room.walls[w];
+  const start = heightMm ?? room.ceilingHeightMm;
+  return Math.min(start, heightEndMm ?? start);
+};
+
+// A tall unit must stand under the ceiling everywhere along its wall.
+const fitsUnderCeiling = (room, unit, w) =>
+  unit.tier !== "tall" || unit.heightMm <= lowestCeilingMm(room, w);
 
 /**
  * Space each tier can't use on each wall: the corner taken by the previous
@@ -61,7 +77,7 @@ export const roomSpans = (room, units) => {
 
   return room.walls.map((wall, i) => {
     const spans = { base: [], wall: [], tall: [] };
-    if (i > 0) {
+    if (i > 0 && room.shape !== "galley") {
       spans.base.push([0, depthOf("base")]);
       spans.tall.push([0, depthOf("base")]);
       spans.wall.push([0, depthOf("wall")]);
@@ -269,6 +285,15 @@ export const expandUnits = (products) => {
 export const generateLayout = (room, products, { plan = null, engine = ENGINE } = {}) => {
   const { units, warnings } = expandUnits(products);
 
+  (room.cornerAnglesDeg ?? []).forEach((deg, i) => {
+    if (Math.abs(deg - 90) > SQUARE_TOLERANCE_DEG) {
+      warnings.push(
+        `Corner ${letter(i)}/${letter(i + 1)} is ${Math.round(deg * 10) / 10}°, not square. ` +
+          "Cabinets assume 90°, so check it on site"
+      );
+    }
+  });
+
   // unit id → { w: wall index, near: anchor, rank: position in the plan }
   const planned = new Map();
   (plan ?? []).forEach(({ unit, wall, near }, rank) => {
@@ -354,6 +379,7 @@ export const generateLayout = (room, products, { plan = null, engine = ENGINE } 
   const groupCount = (unit) => (unit.tier === "wall" ? 2 : 1);
 
   const placeFirstFit = (unit, w, group) => {
+    if (!fitsUnderCeiling(room, unit, w)) return false;
     for (const spans of groupsOf(unit, w, group)) {
       for (const [a, b] of spans) {
         if (b - a >= unit.widthMm) {
@@ -368,6 +394,7 @@ export const generateLayout = (room, products, { plan = null, engine = ENGINE } 
   // Places [unit] on wall w as close to [near] as the free space allows.
   // Returns false if it doesn't fit on that wall at all.
   const placeNear = (unit, w, near, group) => {
+    if (!fitsUnderCeiling(room, unit, w)) return false;
     const length = room.walls[w].lengthMm;
     const opening = room.walls[w].openings.find((o) => o.type === near);
     // Target x for the unit's centre; an anchor missing on this wall
@@ -450,6 +477,7 @@ export const generateLayout = (room, products, { plan = null, engine = ENGINE } 
     if (placePlanned(unit)) continue;
     let done = false;
     for (let w = lastWall; w >= 0 && !done; w--) {
+      if (!fitsUnderCeiling(room, unit, w)) continue;
       for (const [a, b] of freeSpans(w, "tall").reverse()) {
         if (b - a >= unit.widthMm) {
           place(unit, w, b - unit.widthMm);
@@ -591,6 +619,9 @@ export const checkLayout = (room, base, edited) => {
       problems.push(`${item.sku} runs past the end of the wall`);
     } else if (spans[w][item.tier].some((s) => overlaps(s, span))) {
       problems.push(`${item.sku} blocks a door, window, hob or corner`);
+    }
+    if (!fitsUnderCeiling(room, item, w)) {
+      problems.push(`${item.sku} is taller than the ceiling on ${wallName(w)}`);
     }
     for (const other of items.slice(n + 1)) {
       if (other.wallId === item.wallId && conflicts(item, other) && overlaps(span, spanOf(other))) {
