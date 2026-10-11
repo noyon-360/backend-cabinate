@@ -8,7 +8,8 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
 import { parseRoomSpec } from "../utils/roomSpec.js";
-import { generateLayout, checkLayout } from "../utils/layoutEngine.js";
+import { checkLayout } from "../utils/layoutEngine.js";
+import { generateSmartLayout } from "../utils/smartLayout.js";
 import { BUSINESS } from "../utils/business.js";
 import { renderProposalPdf } from "../utils/proposalPdf.js";
 import {
@@ -398,7 +399,8 @@ export const generateAILayout = catchAsync(async (req, res) => {
   job.aiLayout = {
     status: "completed",
     generatedAt: new Date(),
-    layoutData: generateLayout(room, products),
+    // LLM-assisted when Ollama is reachable, rules-only otherwise.
+    layoutData: await generateSmartLayout(room, products),
   };
   clearDesign(job);
   job.currentStep = Math.max(job.currentStep, 5);

@@ -18,9 +18,13 @@
 
 export const ENGINE = "rules-v1";
 
+// Where a planned unit should sit on its wall.
+export const ANCHORS = ["start", "end", "sink", "hob", "window"];
+
 const DEFAULT_DEPTH = { base: 600, wall: 350, tall: 600 };
 const BASE_HEIGHT_MM = 900; // a window sill below this blocks base units too
 const MAX_FILLER_MM = 150; // gaps up to this get a filler panel
+const TALL_HOB_GAP_MM = 300; // heat clearance between a hob and a tall unit
 const ALL_PLACED = "All selected products placed";
 
 const TIER_OF = { Base: "base", Wall: "wall", Tall: "tall" };
@@ -28,6 +32,10 @@ const TIER_OF = { Base: "base", Wall: "wall", Tall: "tall" };
 const isSinkBase = (u) =>
   u.tier === "base" &&
   (/^SB/i.test(u.sku) || /sink/i.test(u.name ?? ""));
+
+const isDrawerUnit = (u) =>
+  u.tier === "base" &&
+  (/^DU/i.test(u.sku) || /drawer/i.test(u.name ?? ""));
 
 const overlaps = ([a1, b1], [a2, b2]) => a1 < b2 && a2 < b1;
 
@@ -44,7 +52,7 @@ const spanOf = (i) => [i.offsetMm, i.offsetMm + i.widthMm];
  * cabinet of that tier in [units].
  * @returns [{ base: [[start, end]], wall: [...], tall: [...] }] per wall
  */
-const roomSpans = (room, units) => {
+export const roomSpans = (room, units) => {
   const depthOf = (tier) =>
     Math.max(
       DEFAULT_DEPTH[tier],
@@ -70,7 +78,8 @@ const roomSpans = (room, units) => {
         if ((o.sillMm ?? 0) < BASE_HEIGHT_MM) spans.base.push(span);
       } else if (o.type === "hob") {
         spans.wall.push(span); // keep space for the extractor hood
-        spans.tall.push(span);
+        // Heat clearance: tall units stay this far from the hob.
+        spans.tall.push([span[0] - TALL_HOB_GAP_MM, span[1] + TALL_HOB_GAP_MM]);
       }
     }
     return spans;
@@ -78,7 +87,7 @@ const roomSpans = (room, units) => {
 };
 
 // Gaps between [spans] along a wall of [length], left to right.
-const freeBetween = (spans, length) => {
+export const freeBetween = (spans, length) => {
   const free = [];
   let cursor = 0;
   for (const [a, b] of [...spans].sort((x, y) => x[0] - y[0])) {
@@ -161,6 +170,55 @@ const computeChecks = (room, items, allPlaced) => {
   );
   checks.push({ label: "No wall units over the hob", passed: hobsClear });
 
+  const hobs = room.walls.flatMap((wall) =>
+    wall.openings
+      .filter((o) => o.type === "hob")
+      .map((o) => ({ wallId: wall.id, from: o.offsetMm, to: o.offsetMm + o.widthMm }))
+  );
+  // A hob sits on a worktop, so a base unit must be under its centre.
+  if (hobs.length) {
+    const supported = hobs.every((h) => {
+      const centre = (h.from + h.to) / 2;
+      return items.some(
+        (b) =>
+          b.tier === "base" &&
+          b.wallId === h.wallId &&
+          b.offsetMm <= centre &&
+          centre <= b.offsetMm + b.widthMm
+      );
+    });
+    checks.push({ label: "Base unit under the hob", passed: supported });
+  }
+
+  const talls = items.filter((i) => i.tier === "tall");
+  if (hobs.length && talls.length) {
+    const clear = talls.every((t) =>
+      hobs.every(
+        (h) =>
+          h.wallId !== t.wallId ||
+          t.offsetMm >= h.to + TALL_HOB_GAP_MM ||
+          t.offsetMm + t.widthMm <= h.from - TALL_HOB_GAP_MM
+      )
+    );
+    checks.push({ label: "Tall units kept clear of the hob", passed: clear });
+  }
+
+  // A hung unit needs a worktop under its centre.
+  const hung = items.filter((i) => i.tier === "wall");
+  if (hung.length) {
+    const supported = hung.every((w) => {
+      const centre = w.offsetMm + w.widthMm / 2;
+      return items.some(
+        (b) =>
+          b.tier === "base" &&
+          b.wallId === w.wallId &&
+          b.offsetMm <= centre &&
+          centre <= b.offsetMm + b.widthMm
+      );
+    });
+    checks.push({ label: "Wall units above a worktop", passed: supported });
+  }
+
   return checks;
 };
 
@@ -168,14 +226,12 @@ const byPosition = (a, b) =>
   a.wallId === b.wallId ? a.offsetMm - b.offsetMm : a.wallId.localeCompare(b.wallId);
 
 /**
- * @param room     RoomSpec (validated by utils/roomSpec.js)
- * @param products [{ product: populated Product doc, quantity }]
- * @returns { engine, items, fillers, warnings, checks }
+ * One entry per physical cabinet, each with a stable id ("U1", "U2", …)
+ * that a plan refers to. Same products → same ids.
+ * @returns { units, warnings }
  */
-export const generateLayout = (room, products) => {
+export const expandUnits = (products) => {
   const warnings = [];
-
-  // One entry per physical cabinet.
   const units = [];
   for (const { product, quantity } of products) {
     const tier = TIER_OF[product.category];
@@ -185,6 +241,7 @@ export const generateLayout = (room, products) => {
     }
     for (let i = 0; i < quantity; i++) {
       units.push({
+        id: `U${units.length + 1}`,
         productId: String(product._id),
         sku: product.sku,
         name: product.name,
@@ -195,6 +252,31 @@ export const generateLayout = (room, products) => {
       });
     }
   }
+  return { units, warnings };
+};
+
+/**
+ * @param room     RoomSpec (validated by utils/roomSpec.js)
+ * @param products [{ product: populated Product doc, quantity }]
+ * @param plan     optional [{ unit: "U1", wall: "w2", near: "hob" }] from
+ *                 utils/llmLayout.js. Each planned unit goes on its wall as
+ *                 close to its anchor as space allows (see ANCHORS), in
+ *                 plan order; the sink base still goes to the sink
+ *                 point/window, and anything left out is placed by the rules.
+ * @param engine   name reported in the result
+ * @returns { engine, items, fillers, warnings, checks }
+ */
+export const generateLayout = (room, products, { plan = null, engine = ENGINE } = {}) => {
+  const { units, warnings } = expandUnits(products);
+
+  // unit id → { w: wall index, near: anchor, rank: position in the plan }
+  const planned = new Map();
+  (plan ?? []).forEach(({ unit, wall, near }, rank) => {
+    const w = room.walls.findIndex((x) => x.id === wall);
+    if (w >= 0 && !planned.has(unit)) {
+      planned.set(unit, { w, near: ANCHORS.includes(near) ? near : "start", rank });
+    }
+  });
 
   // Grows as cabinets are placed.
   const blocked = roomSpans(room, units);
@@ -206,22 +288,166 @@ export const generateLayout = (room, products) => {
     return blocked[wallIndex][tier].every((s) => !overlaps(s, [start, start + width]));
   };
 
-  const place = (unit, wallIndex, offsetMm) => {
-    items.push({ ...unit, wallId: room.walls[wallIndex].id, offsetMm });
+  // unit → { item, w, tiers, span, anchor } so a placement can be undone.
+  // [anchor] is the x the unit must stay over (sink point, window, hob).
+  const records = new Map();
+
+  const place = (unit, wallIndex, offsetMm, anchor = null) => {
+    const { id, ...rest } = unit; // plan ids stay internal
+    const item = { ...rest, wallId: room.walls[wallIndex].id, offsetMm };
+    items.push(item);
     placedUnits.add(unit);
+    const span = [offsetMm, offsetMm + unit.widthMm];
     const tiers = unit.tier === "tall" ? ["base", "wall", "tall"] : [unit.tier];
-    for (const t of tiers) blocked[wallIndex][t].push([offsetMm, offsetMm + unit.widthMm]);
+    for (const t of tiers) blocked[wallIndex][t].push(span);
+    records.set(unit, { item, w: wallIndex, tiers, span, anchor });
+  };
+
+  const unplace = (unit) => {
+    const r = records.get(unit);
+    items.splice(items.indexOf(r.item), 1);
+    placedUnits.delete(unit);
+    for (const t of r.tiers) {
+      const spans = blocked[r.w][t];
+      spans.splice(spans.indexOf(r.span), 1);
+    }
+    records.delete(unit);
   };
 
   const freeSpans = (w, tier) =>
     freeBetween(blocked[w][tier], room.walls[w].lengthMm);
 
+  // Where [unit] may go on wall w, best first. Wall units try the parts of
+  // the free space that sit above a placed base unit (a worktop) before
+  // anything else; base units are always placed before wall units.
+  const candidateSpans = (unit, w) => {
+    const free = freeSpans(w, unit.tier);
+    if (unit.tier !== "wall") return [free];
+    const worktop = items
+      .filter((i) => i.tier === "base" && i.wallId === room.walls[w].id)
+      .map(spanOf);
+    const above = free.flatMap(([a, b]) =>
+      worktop
+        .map(([c, d]) => [Math.max(a, c), Math.min(b, d)])
+        .filter(([x, y]) => y > x)
+    );
+    // Merge touching pieces (neighbouring base units) into one span.
+    const merged = [];
+    for (const [x, y] of above.sort((p, q) => p[0] - q[0])) {
+      const last = merged.at(-1);
+      if (last && x <= last[1]) last[1] = Math.max(last[1], y);
+      else merged.push([x, y]);
+    }
+    return [merged, free];
+  };
+
   const unplaced = [];
   const lastWall = room.walls.length - 1;
 
-  // 1. Tall units: packed from the far end of the last wall backwards,
-  //    then any other wall end that has room.
+  // First free span on wall w (left to right) that fits; places and
+  // returns true, or returns false.
+  // [group]: only that preference level of candidateSpans (0 = best).
+  const groupsOf = (unit, w, group) => {
+    const all = candidateSpans(unit, w);
+    return group === undefined ? all : all.slice(group, group + 1);
+  };
+  const groupCount = (unit) => (unit.tier === "wall" ? 2 : 1);
+
+  const placeFirstFit = (unit, w, group) => {
+    for (const spans of groupsOf(unit, w, group)) {
+      for (const [a, b] of spans) {
+        if (b - a >= unit.widthMm) {
+          place(unit, w, a);
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Places [unit] on wall w as close to [near] as the free space allows.
+  // Returns false if it doesn't fit on that wall at all.
+  const placeNear = (unit, w, near, group) => {
+    const length = room.walls[w].lengthMm;
+    const opening = room.walls[w].openings.find((o) => o.type === near);
+    // Target x for the unit's centre; an anchor missing on this wall
+    // means "start".
+    const target = opening
+      ? opening.offsetMm + opening.widthMm / 2
+      : near === "end"
+        ? length
+        : 0;
+
+    for (const spans of groupsOf(unit, w, group)) {
+      let best = null;
+      for (const [a, b] of spans) {
+        if (b - a < unit.widthMm) continue;
+        const offset = Math.round(
+          Math.min(Math.max(target - unit.widthMm / 2, a), b - unit.widthMm)
+        );
+        const distance = Math.abs(offset + unit.widthMm / 2 - target);
+        if (!best || distance < best.distance) best = { offset, distance };
+      }
+      if (best) {
+        place(unit, w, best.offset);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Planned units: their wall first, then the others left to right. Wall
+  // units look for a worktop below on every wall before going without.
+  const placePlanned = (unit) => {
+    const p = planned.get(unit.id);
+    if (!p) return false;
+    for (let g = 0; g < groupCount(unit); g++) {
+      if (placeNear(unit, p.w, p.near, g)) return true;
+      if (room.walls.some((_, w) => w !== p.w && placeFirstFit(unit, w, g))) return true;
+    }
+    return false;
+  };
+
+  const placeAnywhere = (unit) => {
+    for (let g = 0; g < groupCount(unit); g++) {
+      if (room.walls.some((_, w) => placeFirstFit(unit, w, g))) return true;
+    }
+    return false;
+  };
+
+  // Slides each base unit on each wall as far left as it can go (staying
+  // over its anchor, if any) so scattered small gaps merge into one.
+  const compactBase = () => {
+    room.walls.forEach((_, w) => {
+      const onWall = units
+        .filter((u) => u.tier === "base" && records.get(u)?.w === w)
+        .sort((a, b) => records.get(a).item.offsetMm - records.get(b).item.offsetMm);
+      for (const u of onWall) {
+        const { item, anchor } = records.get(u);
+        const was = item.offsetMm;
+        unplace(u);
+        let at = null;
+        for (const [a, b] of freeSpans(w, "base")) {
+          let lo = a;
+          let hi = b - u.widthMm;
+          if (anchor !== null) {
+            lo = Math.max(lo, Math.ceil(anchor - u.widthMm));
+            hi = Math.min(hi, Math.floor(anchor));
+          }
+          if (lo <= hi) {
+            at = lo;
+            break;
+          }
+        }
+        place(u, w, at ?? was, anchor);
+      }
+    });
+  };
+
+  // 1. Tall units: planned ones at their anchor; otherwise from the far
+  //    end of the last wall backwards.
   for (const unit of units.filter((u) => u.tier === "tall")) {
+    if (placePlanned(unit)) continue;
     let done = false;
     for (let w = lastWall; w >= 0 && !done; w--) {
       for (const [a, b] of freeSpans(w, "tall").reverse()) {
@@ -242,7 +468,7 @@ export const generateLayout = (room, products) => {
     for (const t of targets) {
       const offset = Math.round(t.centre - sinkUnit.widthMm / 2);
       if (fits(t.w, "base", offset, sinkUnit.widthMm)) {
-        place(sinkUnit, t.w, offset);
+        place(sinkUnit, t.w, offset, t.centre);
         break;
       }
     }
@@ -251,25 +477,52 @@ export const generateLayout = (room, products) => {
     }
   }
 
-  // 3. Remaining base and wall units: widest first, into the first free
-  //    span that fits (walls A → C, left to right).
+  // 2b. A base unit under each hob: the one the plan anchors to the hob,
+  //     else a drawer unit, else the base unit closest to the hob's width.
+  room.walls.forEach((wall, w) => {
+    for (const hob of wall.openings.filter((o) => o.type === "hob")) {
+      const free = units.filter(
+        (u) => u.tier === "base" && !placedUnits.has(u) && !isSinkBase(u)
+      );
+      const pick =
+        free.find((u) => planned.get(u.id)?.near === "hob" && planned.get(u.id).w === w) ??
+        free.find(isDrawerUnit) ??
+        [...free].sort(
+          (a, b) => Math.abs(a.widthMm - hob.widthMm) - Math.abs(b.widthMm - hob.widthMm)
+        )[0];
+      if (!pick) continue;
+      const centre = hob.offsetMm + hob.widthMm / 2;
+      const offset = Math.round(centre - pick.widthMm / 2);
+      // Centred if possible, else anywhere still under the hob's centre.
+      const options = [offset];
+      for (let o = Math.ceil(centre - pick.widthMm); o <= Math.floor(centre); o += 25) {
+        options.push(o);
+      }
+      const at = options.find((o) => fits(w, "base", o, pick.widthMm));
+      if (at !== undefined) place(pick, w, at, centre);
+    }
+  });
+
+  // 3. Remaining base, then wall units. Planned ones first, in plan
+  //    order, at their anchors; then the rest widest first into the first
+  //    free span that fits (walls A → C, left to right).
   for (const tier of ["base", "wall"]) {
+    const rank = (u) => planned.get(u.id)?.rank ?? Infinity;
     const rest = units
       .filter((u) => u.tier === tier && !placedUnits.has(u))
-      .sort((a, b) => b.widthMm - a.widthMm);
+      .sort((a, b) => rank(a) - rank(b) || b.widthMm - a.widthMm);
 
-    for (const unit of rest) {
-      let done = false;
-      for (let w = 0; w <= lastWall && !done; w++) {
-        for (const [a, b] of freeSpans(w, tier)) {
-          if (b - a >= unit.widthMm) {
-            place(unit, w, a);
-            done = true;
-            break;
-          }
-        }
+    const missed = rest.filter((unit) => !placePlanned(unit) && !placeAnywhere(unit));
+
+    // Base units that didn't fit: close up the gaps and try once more,
+    // before wall units are hung over the final base positions.
+    if (tier === "base" && missed.length) {
+      compactBase();
+      for (const unit of missed) {
+        if (!placePlanned(unit) && !placeAnywhere(unit)) unplaced.push(unit);
       }
-      if (!done) unplaced.push(unit);
+    } else {
+      unplaced.push(...missed);
     }
   }
 
@@ -280,13 +533,19 @@ export const generateLayout = (room, products) => {
   items.sort(byPosition);
 
   return {
-    engine: ENGINE,
+    engine,
     items,
     fillers: computeFillers(room, items),
     warnings,
     checks: computeChecks(room, items, unplaced.length === 0),
   };
 };
+
+/** Higher is better: fewer failed checks, then more cabinets placed. */
+export const layoutScore = (layout) => [
+  -layout.checks.filter((c) => !c.passed).length,
+  layout.items.length,
+];
 
 /**
  * Re-checks a layout the user rearranged in the Design step.
