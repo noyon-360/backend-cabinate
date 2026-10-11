@@ -7,6 +7,7 @@ import catchAsync from "../utils/catchAsync.js";
 import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
+import { parseRoomSpec } from "../utils/roomSpec.js";
 
 // ─── CREATE JOB — Step 1: Job Details (Screen 8) ─────────────────────────────
 export const createJob = catchAsync(async (req, res) => {
@@ -212,19 +213,39 @@ export const saveRoomCapture = catchAsync(async (req, res) => {
 });
 
 // ─── SAVE MEASUREMENTS (Step 3 — Screen 11) ───────────────────────────────────
+// Body: { room: RoomSpec } (see utils/roomSpec.js).
+// Legacy body { width, depth, height } in meters is still accepted.
 export const saveMeasurements = catchAsync(async (req, res) => {
   const { id } = req.params;
-  const { width, depth, height } = req.body;
+  const { width, depth, height, room } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppError(httpStatus.BAD_REQUEST, "Invalid job ID");
   }
 
-  if (!width || !depth || !height) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      "Width, depth, and height are required"
-    );
+  let measurements;
+  if (room !== undefined) {
+    const spec = parseRoomSpec(room);
+    // Keep the legacy fields filled for older clients and the AI layout check.
+    measurements = {
+      width: spec.walls[0].lengthMm / 1000,
+      depth: spec.walls[1] ? spec.walls[1].lengthMm / 1000 : null,
+      height: spec.ceilingHeightMm / 1000,
+      room: spec,
+    };
+  } else {
+    if (!width || !depth || !height) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Width, depth, and height are required"
+      );
+    }
+    measurements = {
+      width: Number(width),
+      depth: Number(depth),
+      height: Number(height),
+      room: null,
+    };
   }
 
   const ownerId = req.user.role === "staff" ? req.user.ownerId : req.user._id;
@@ -234,11 +255,7 @@ export const saveMeasurements = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.NOT_FOUND, "Job not found");
   }
 
-  job.measurements = {
-    width: Number(width),
-    depth: Number(depth),
-    height: Number(height),
-  };
+  job.measurements = measurements;
   job.currentStep = Math.max(job.currentStep, 3);
 
   await job.save();

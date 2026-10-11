@@ -14,6 +14,41 @@ export const JOB_STEPS = [
 
 export const JOB_STATUSES = ["New", "In Progress", "Completed", "Proposal Sent"];
 
+// ── RoomSpec: the kitchen walls, all lengths in integer mm ──
+// Same shape the app sends; validated in utils/roomSpec.js.
+export const ROOM_SHAPES = ["straight", "L", "U"];
+export const ROOM_SOURCES = ["manual", "arPoints", "arGuided", "lidarScan"];
+export const OPENING_TYPES = ["window", "door", "sink", "hob"];
+
+const openingSchema = new mongoose.Schema(
+  {
+    type: { type: String, enum: OPENING_TYPES, required: true },
+    offsetMm: { type: Number, required: true, min: 0 }, // from the wall's left end
+    widthMm: { type: Number, required: true, min: 1 },
+    sillMm: { type: Number, default: null }, // windows only
+  },
+  { _id: false }
+);
+
+const wallSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    lengthMm: { type: Number, required: true, min: 1 },
+    openings: { type: [openingSchema], default: [] },
+  },
+  { _id: false }
+);
+
+const roomSchema = new mongoose.Schema(
+  {
+    shape: { type: String, enum: ROOM_SHAPES, required: true },
+    ceilingHeightMm: { type: Number, required: true, min: 1 },
+    source: { type: String, enum: ROOM_SOURCES, required: true },
+    walls: { type: [wallSchema], required: true },
+  },
+  { _id: false }
+);
+
 const jobSchema = new mongoose.Schema(
   {
     jobRef: {
@@ -86,9 +121,11 @@ const jobSchema = new mongoose.Schema(
 
     // ── Step 3: Measurements ──
     measurements: {
-      width: { type: Number, default: null },   // in meters
+      // Legacy box size in meters. Derived from `room` when one is saved.
+      width: { type: Number, default: null },
       depth: { type: Number, default: null },
       height: { type: Number, default: null },
+      room: { type: roomSchema, default: null },
     },
 
     // ── Step 4: Selected Products ──
