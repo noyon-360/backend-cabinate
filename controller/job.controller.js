@@ -8,6 +8,31 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
 import { parseRoomSpec } from "../utils/roomSpec.js";
+import { generateLayout, checkLayout } from "../utils/layoutEngine.js";
+import { BUSINESS } from "../utils/business.js";
+import { renderProposalPdf } from "../utils/proposalPdf.js";
+import {
+  uploadProposalPdf,
+  deleteProposalPdf,
+  fetchProposalPdf,
+} from "../utils/proposalStorage.js";
+
+// Cleared whenever its inputs (walls or products) change.
+const EMPTY_LAYOUT = { status: null, generatedAt: null, layoutData: null };
+
+// The design is an edit of the generated layout, so it goes whenever the
+// layout is cleared or regenerated.
+const clearDesign = (job) => {
+  job.design.layout = null;
+  job.design.layoutImage = { public_id: "", url: "" };
+  clearProposal(job);
+};
+
+// Anything shown on the proposal changed: the PDF is rebuilt next time.
+const clearProposal = (job) => {
+  job.proposal.pdfUrl = "";
+  job.proposal.generatedAt = null;
+};
 
 // ─── CREATE JOB — Step 1: Job Details (Screen 8) ─────────────────────────────
 export const createJob = catchAsync(async (req, res) => {
@@ -168,6 +193,7 @@ export const updateJobDetails = catchAsync(async (req, res) => {
   if (status && ["New", "In Progress", "Completed", "Proposal Sent"].includes(status)) {
     job.status = status;
   }
+  clearProposal(job);
 
   await job.save();
 
@@ -256,6 +282,8 @@ export const saveMeasurements = catchAsync(async (req, res) => {
   }
 
   job.measurements = measurements;
+  job.aiLayout = EMPTY_LAYOUT; // built for the old walls
+  clearDesign(job);
   job.currentStep = Math.max(job.currentStep, 3);
 
   await job.save();
@@ -309,6 +337,8 @@ export const saveSelectedProducts = catchAsync(async (req, res) => {
   }
 
   job.selectedProducts = enrichedProducts;
+  job.aiLayout = EMPTY_LAYOUT; // built from the old products
+  clearDesign(job);
   job.currentStep = Math.max(job.currentStep, 4);
 
   // Auto-calculate subtotal
@@ -346,27 +376,31 @@ export const generateAILayout = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.NOT_FOUND, "Job not found");
   }
 
-  if (!job.measurements.width) {
+  const room = job.measurements?.room?.toObject();
+  if (!room) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Measurements are required before generating layout"
+      "Save the room walls in Measurements before generating a layout"
     );
   }
 
-  // Simulate AI layout generation
-  // In production: call Gemini or a layout engine here
+  // Products deleted from the catalog since selection populate as null.
+  const products = job.selectedProducts
+    .filter((p) => p.productId)
+    .map((p) => ({ product: p.productId, quantity: p.quantity }));
+  if (products.length === 0) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Select products before generating a layout"
+    );
+  }
+
   job.aiLayout = {
     status: "completed",
     generatedAt: new Date(),
-    layoutData: {
-      cabinetSpacingApplied: true,
-      doorSwingClearancesChecked: true,
-      workTriangleOptimized: true,
-      layoutName: "Layout A — Recommended",
-      totalProducts: job.selectedProducts.length,
-      roomDimensions: job.measurements,
-    },
+    layoutData: generateLayout(room, products),
   };
+  clearDesign(job);
   job.currentStep = Math.max(job.currentStep, 5);
 
   await job.save();
@@ -383,7 +417,8 @@ export const generateAILayout = catchAsync(async (req, res) => {
 });
 
 // ─── SAVE DESIGN (Step 6 — Screen 14) ─────────────────────────────────────────
-// Optionally upload a layout image
+// Multipart: layoutName?, layout? (JSON string: { items: [{...item, wallId,
+// offsetMm}] }), layoutImage? (PNG file of the elevation).
 export const saveDesign = catchAsync(async (req, res) => {
   const { id } = req.params;
   const { layoutName } = req.body;
@@ -399,6 +434,33 @@ export const saveDesign = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.NOT_FOUND, "Job not found");
   }
 
+  if (req.body.layout !== undefined) {
+    let edited;
+    try {
+      edited =
+        typeof req.body.layout === "string"
+          ? JSON.parse(req.body.layout)
+          : req.body.layout;
+    } catch {
+      throw new AppError(httpStatus.BAD_REQUEST, "layout must be JSON");
+    }
+
+    const room = job.measurements?.room?.toObject();
+    const base = job.aiLayout?.layoutData;
+    if (!room || !base?.items) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Generate the layout before saving a design"
+      );
+    }
+
+    const { layout, problems } = checkLayout(room, base, edited?.items);
+    if (problems) {
+      throw new AppError(httpStatus.BAD_REQUEST, problems.join("; "));
+    }
+    job.design.layout = layout;
+  }
+
   job.design.layoutName = layoutName || "Layout A — Recommended";
 
   if (req.file) {
@@ -411,6 +473,7 @@ export const saveDesign = catchAsync(async (req, res) => {
     };
   }
 
+  clearProposal(job);
   job.currentStep = Math.max(job.currentStep, 6);
 
   await job.save();
@@ -459,6 +522,7 @@ export const saveEstimate = catchAsync(async (req, res) => {
     taxAmount: Math.round(taxAmount * 100) / 100,
     total: Math.round(total * 100) / 100,
   };
+  clearProposal(job);
   job.currentStep = Math.max(job.currentStep, 7);
 
   await job.save();
@@ -472,9 +536,43 @@ export const saveEstimate = catchAsync(async (req, res) => {
 });
 
 // ─── GENERATE PROPOSAL (Step 8 — Screen 16) ───────────────────────────────────
+const DEFAULT_TERMS =
+  "50% deposit required upon acceptance. Balance due on installation completion. Price includes supply and installation of all listed cabinets. Valid for 30 days from date of issue.";
+
+// Everything the Proposal screen and PDF show, already computed. The app
+// renders this as-is so the screen and the PDF can't disagree.
+const buildProposalView = (job) => ({
+  business: BUSINESS,
+  jobRef: job.jobRef,
+  date: job.proposal.generatedAt,
+  customer: {
+    name: job.customerName,
+    address: job.propertyAddress,
+    phone: job.phoneNumber,
+    email: job.emailAddress,
+  },
+  layoutImageUrl: job.design.layoutImage?.url || null,
+  lines: job.selectedProducts.map((p) => ({
+    name: p.productId?.name ?? "Removed product",
+    sku: p.productId?.sku ?? "",
+    quantity: p.quantity,
+    unitPrice: p.unitPrice,
+    lineTotal: p.lineTotal,
+  })),
+  subTotal: job.estimate.subTotal,
+  installationCharge: job.estimate.installationCharge,
+  deliveryCharge: job.estimate.deliveryCharge,
+  taxRate: job.estimate.taxRate,
+  taxAmount: job.estimate.taxAmount,
+  total: job.estimate.total,
+  terms: job.proposal.terms || DEFAULT_TERMS,
+});
+
+// Body: { terms? }. Builds the PDF only when something on it changed since
+// the last one (see clearProposal); otherwise returns the stored one.
 export const generateProposal = catchAsync(async (req, res) => {
   const { id } = req.params;
-  const { terms } = req.body;
+  const { terms } = req.body ?? {};
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppError(httpStatus.BAD_REQUEST, "Invalid job ID");
@@ -489,13 +587,30 @@ export const generateProposal = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.NOT_FOUND, "Job not found");
   }
 
-  job.proposal = {
-    generatedAt: new Date(),
-    pdfUrl: "", // In production: generate PDF and upload to Cloudinary
-    terms:
-      terms ||
-      "50% deposit required upon acceptance. Balance due on installation completion. Price includes supply and installation of all listed cabinets. Valid for 30 days from date of issue.",
-  };
+  if (job.currentStep < 7 || job.selectedProducts.length === 0) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Save the estimate before generating the proposal"
+    );
+  }
+
+  if (terms && terms !== job.proposal.terms) {
+    job.proposal.terms = terms;
+    clearProposal(job);
+  }
+
+  // Older proposals were public files without a publicId; rebuild those
+  // as private ones too.
+  if (!job.proposal.pdfUrl || !job.proposal.pdfPublicId) {
+    const previous = job.proposal.pdfPublicId;
+    job.proposal.generatedAt = new Date();
+    const pdf = await renderProposalPdf(buildProposalView(job));
+    const { publicId, url } = await uploadProposalPdf(pdf, job.jobRef);
+    job.proposal.pdfUrl = url;
+    job.proposal.pdfPublicId = publicId;
+    await deleteProposalPdf(previous);
+  }
+
   job.currentStep = 8;
   job.status = "Proposal Sent";
 
@@ -505,20 +620,37 @@ export const generateProposal = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Proposal generated successfully",
-    data: {
-      jobRef: job.jobRef,
-      customerName: job.customerName,
-      propertyAddress: job.propertyAddress,
-      phoneNumber: job.phoneNumber,
-      emailAddress: job.emailAddress,
-      design: job.design,
-      selectedProducts: job.selectedProducts,
-      estimate: job.estimate,
-      proposal: job.proposal,
-      currentStep: job.currentStep,
-      status: job.status,
-    },
+    data: { proposal: buildProposalView(job), currentStep: job.currentStep },
   });
+});
+
+// ─── DOWNLOAD PROPOSAL PDF (Step 8) ───────────────────────────────────────────
+// Streams the private PDF to an authorised user. Call POST /proposal first;
+// it (re)builds the file when the job changed.
+export const getProposalPdf = catchAsync(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid job ID");
+  }
+
+  const ownerId = req.user.role === "staff" ? req.user.ownerId : req.user._id;
+  const job = await Job.findOne({ _id: id, ownerId });
+
+  if (!job) {
+    throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  }
+  if (!job.proposal.pdfUrl || !job.proposal.pdfPublicId) {
+    throw new AppError(httpStatus.NOT_FOUND, "Generate the proposal first");
+  }
+
+  const pdf = await fetchProposalPdf(job.proposal.pdfPublicId);
+  res.set({
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `attachment; filename="Proposal-${job.jobRef}.pdf"`,
+    "Cache-Control": "private, no-store",
+  });
+  res.send(pdf);
 });
 
 // ─── DELETE JOB ────────────────────────────────────────────────────────────────
@@ -663,6 +795,8 @@ export const addProductToJob = catchAsync(async (req, res) => {
     (sum, p) => sum + p.lineTotal,
     0
   );
+  job.aiLayout = EMPTY_LAYOUT; // built from the old products
+  clearDesign(job);
 
   await job.save();
 

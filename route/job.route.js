@@ -11,6 +11,7 @@ import {
   saveDesign,
   saveEstimate,
   generateProposal,
+  getProposalPdf,
   deleteJob,
   getDashboardStats,
   addProductToJob,
@@ -40,6 +41,7 @@ router.patch("/:id/ai-layout", generateAILayout);                          // St
 router.patch("/:id/design", upload.single("layoutImage"), saveDesign);     // Step 6
 router.patch("/:id/estimate", saveEstimate);                               // Step 7
 router.post("/:id/proposal", generateProposal);                            // Step 8
+router.get("/:id/proposal/pdf", getProposalPdf);                           // Step 8 download
 
 // Add product from catalog to a job (Screen 20)
 router.post("/add-product", addProductToJob);

@@ -165,8 +165,11 @@ const jobSchema = new mongoose.Schema(
       layoutData: { type: mongoose.Schema.Types.Mixed, default: null },
     },
 
-    // ── Step 6: Design (layout image) ──
+    // ── Step 6: Design (edited layout + elevation image) ──
     design: {
+      // aiLayout.layoutData after the user rearranged it; checked by
+      // checkLayout() in utils/layoutEngine.js. Null until saved.
+      layout: { type: mongoose.Schema.Types.Mixed, default: null },
       layoutImage: {
         public_id: { type: String, default: "" },
         url: { type: String, default: "" },
@@ -187,7 +190,10 @@ const jobSchema = new mongoose.Schema(
     // ── Step 8: Proposal ──
     proposal: {
       generatedAt: { type: Date, default: null },
+      // Private Cloudinary file (type "authenticated"); this URL is not
+      // publicly readable. Clients download via GET /jobs/:id/proposal/pdf.
       pdfUrl: { type: String, default: "" },
+      pdfPublicId: { type: String, default: "" },
       terms: {
         type: String,
         default:
