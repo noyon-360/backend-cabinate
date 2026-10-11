@@ -1,4 +1,4 @@
 node_modules/
-.env
 public/temp/*
 *.log
+config.bat

@@ -16,7 +16,7 @@ export const JOB_STATUSES = ["New", "In Progress", "Completed", "Proposal Sent"]
 
 // ── RoomSpec: the kitchen walls, all lengths in integer mm ──
 // Same shape the app sends; validated in utils/roomSpec.js.
-export const ROOM_SHAPES = ["straight", "L", "U"];
+export const ROOM_SHAPES = ["straight", "L", "U", "galley"]; // galley: 2 facing walls, no corner
 export const ROOM_SOURCES = ["manual", "arPoints", "arGuided", "lidarScan"];
 export const OPENING_TYPES = ["window", "door", "sink", "hob"];
 
@@ -26,6 +26,7 @@ const openingSchema = new mongoose.Schema(
     offsetMm: { type: Number, required: true, min: 0 }, // from the wall's left end
     widthMm: { type: Number, required: true, min: 1 },
     sillMm: { type: Number, default: null }, // windows only
+    heightMm: { type: Number, default: null }, // windows and doors; null = not measured
   },
   { _id: false }
 );
@@ -35,6 +36,10 @@ const wallSchema = new mongoose.Schema(
     id: { type: String, required: true },
     lengthMm: { type: Number, required: true, min: 1 },
     openings: { type: [openingSchema], default: [] },
+    // Ceiling at the left/right end; null = the room's ceilingHeightMm,
+    // heightEndMm null = same as heightMm.
+    heightMm: { type: Number, default: null },
+    heightEndMm: { type: Number, default: null },
   },
   { _id: false }
 );
@@ -45,6 +50,9 @@ const roomSchema = new mongoose.Schema(
     ceilingHeightMm: { type: Number, required: true, min: 1 },
     source: { type: String, enum: ROOM_SOURCES, required: true },
     walls: { type: [wallSchema], required: true },
+    // Inside angle per corner (walls − 1); absent = all 90°. The default
+    // must stay undefined: Mongoose would otherwise give old jobs [].
+    cornerAnglesDeg: { type: [Number], default: undefined },
   },
   { _id: false }
 );
