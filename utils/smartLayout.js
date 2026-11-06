@@ -14,7 +14,7 @@ const better = (a, b) => {
  * worse (more failed checks, or fewer cabinets placed) than the rules-only
  * one; any LLM failure falls back silently to the rules.
  *
- * `engine` in the result says which was used: "qwen3:8b+rules-v1" or
+ * `engine` in the result says which was used, e.g. "qwen3:8b+rules-v1" or
  * "rules-v1".
  */
 export const generateSmartLayout = async (room, products) => {
@@ -25,7 +25,6 @@ export const generateSmartLayout = async (room, products) => {
   const { units } = expandUnits(products);
   if (units.length < 2) return rules; // nothing to arrange
 
-  const engine = `${settings.model}+${ENGINE}`;
   const deadline = Date.now() + settings.timeoutMs;
   // Failed checks plus "did not fit" notes, so the model knows what to fix.
   const failedOf = (l) => [
@@ -36,8 +35,12 @@ export const generateSmartLayout = async (room, products) => {
   let ai;
   try {
     const first = await suggestPlan(room, units, { deadline });
-    ai = generateLayout(room, products, { plan: first.plan, engine });
-    console.log(`[layout] ${settings.model} plan in ${first.ms} ms`, layoutScore(ai));
+    // Labelled with the model that answered, which may not be the first listed.
+    ai = generateLayout(room, products, {
+      plan: first.plan,
+      engine: `${first.model}+${ENGINE}`,
+    });
+    console.log(`[layout] ${first.model} plan in ${first.ms} ms`, layoutScore(ai));
 
     const failed = failedOf(ai);
     if (failed.length) {
@@ -46,7 +49,10 @@ export const generateSmartLayout = async (room, products) => {
           deadline,
           feedback: { plan: first.plan, failed },
         });
-        const fixed = generateLayout(room, products, { plan: retry.plan, engine });
+        const fixed = generateLayout(room, products, {
+          plan: retry.plan,
+          engine: `${retry.model}+${ENGINE}`,
+        });
         console.log(`[layout] corrected plan in ${retry.ms} ms`, layoutScore(fixed));
         if (better(fixed, ai)) ai = fixed;
       } catch (err) {
@@ -54,7 +60,9 @@ export const generateSmartLayout = async (room, products) => {
       }
     }
   } catch (err) {
-    console.warn(`[layout] ${settings.model} unavailable, using rules: ${err.message}`);
+    console.warn(
+      `[layout] ${settings.models.join(", ")} unavailable, using rules: ${err.message}`
+    );
     return rules;
   }
 

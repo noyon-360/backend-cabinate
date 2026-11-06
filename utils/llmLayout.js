@@ -1,24 +1,46 @@
+import { GoogleGenAI } from "@google/genai";
 import { roomSpans, freeBetween, ANCHORS } from "./layoutEngine.js";
 
-// Asks a local LLM (Ollama) where each cabinet should go: which wall, and
-// what it should sit next to (an anchor). It never produces measurements;
-// the layout engine places each unit as close to its anchor as space
-// allows, then checks the result.
+// Asks an LLM (local Ollama, or the Gemini API) where each cabinet should
+// go: which wall, and what it should sit next to (an anchor). It never
+// produces measurements; the layout engine places each unit as close to
+// its anchor as space allows, then checks the result.
 //
-// Settings (.env), so moving to the VPS is a config change:
+// Settings (.env), so switching provider or server is a config change:
 //   LAYOUT_AI=off               disable and always use the rules
+//   LAYOUT_PROVIDER             "ollama" (default) or "gemini"
+//   LAYOUT_MODEL                default qwen3:8b (ollama),
+//                               gemini-flash-latest (gemini); a comma list
+//                               tries the next model when one fails
+//                               (e.g. Gemini's 503 "high demand")
 //   OLLAMA_URL                  default http://localhost:11434
-//   LAYOUT_MODEL                default qwen3:8b
+//   GEMINI_API_KEY              required for gemini
 //   LAYOUT_AI_TIMEOUT_MS        default 45000 (the app waits 60 s)
-//   LAYOUT_AI_THINK=on          let qwen3 reason first (slower)
+//   LAYOUT_AI_THINK=on          let qwen3 reason first (slower; ollama only)
 
-export const aiSettings = () => ({
-  enabled: process.env.LAYOUT_AI !== "off",
-  url: process.env.OLLAMA_URL ?? "http://localhost:11434",
-  model: process.env.LAYOUT_MODEL ?? "qwen3:8b",
-  timeoutMs: Number(process.env.LAYOUT_AI_TIMEOUT_MS ?? 45000),
-  think: process.env.LAYOUT_AI_THINK === "on",
-});
+export const aiSettings = () => {
+  const provider = process.env.LAYOUT_PROVIDER === "gemini" ? "gemini" : "ollama";
+  const models = (
+    process.env.LAYOUT_MODEL ??
+    (provider === "gemini" ? "gemini-flash-latest" : "qwen3:8b")
+  )
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return {
+    enabled: process.env.LAYOUT_AI !== "off",
+    provider,
+    url: process.env.OLLAMA_URL ?? "http://localhost:11434",
+    model: models[0],
+    models,
+    timeoutMs: Number(process.env.LAYOUT_AI_TIMEOUT_MS ?? 45000),
+    think: process.env.LAYOUT_AI_THINK === "on",
+  };
+};
+
+let gemini;
+const geminiClient = () =>
+  (gemini ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }));
 
 const SYSTEM = `You plan kitchen cabinet layouts. For every unit, choose the wall it goes on and what it should sit near. Software then places each unit as close to that anchor as space allows, so never output measurements.
 
@@ -44,6 +66,14 @@ Rules:
 export const warmUpLayoutModel = async () => {
   const settings = aiSettings();
   if (!settings.enabled) return;
+  if (settings.provider === "gemini") {
+    // Hosted: nothing to load, just say which model and whether a key is set.
+    console.log(
+      `[layout] gemini ${settings.model}` +
+        (process.env.GEMINI_API_KEY ? "" : " (GEMINI_API_KEY missing)")
+    );
+    return;
+  }
   try {
     const res = await fetch(`${settings.url}/api/generate`, {
       method: "POST",
@@ -97,13 +127,64 @@ const describe = (room, units) => {
   };
 };
 
+const MODEL_ATTEMPT_MS = 20000;
+
+// "503 UNAVAILABLE" out of Gemini's JSON error body, for one-line logs.
+const shortError = (err) => {
+  const msg = err?.message ?? String(err);
+  const code = msg.match(/"code":\s*(\d+)/)?.[1];
+  const status = msg.match(/"status":\s*"(\w+)"/)?.[1];
+  return code ? `${code} ${status ?? ""}`.trim() : msg.slice(0, 120);
+};
+
+// Each provider takes a model, the conversation and the JSON schema and
+// returns the reply text, which should be JSON matching the schema.
+const askOllama = async (settings, model, turns, format, signal) => {
+  const res = await fetch(`${settings.url}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      model,
+      stream: false,
+      think: settings.think,
+      format,
+      keep_alive: "30m", // stay loaded between jobs
+      options: { temperature: 0.2 },
+      messages: [{ role: "system", content: SYSTEM }, ...turns],
+    }),
+  });
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
+  return (await res.json()).message?.content;
+};
+
+const askGemini = async (settings, model, turns, format, signal) => {
+  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
+  const res = await geminiClient().models.generateContent({
+    model,
+    contents: turns.map((t) => ({
+      role: t.role === "assistant" ? "model" : "user",
+      parts: [{ text: t.content }],
+    })),
+    config: {
+      systemInstruction: SYSTEM,
+      responseMimeType: "application/json",
+      responseJsonSchema: format,
+      temperature: 0.2,
+      abortSignal: signal,
+    },
+  });
+  return res.text;
+};
+
 /**
  * @param room     RoomSpec
  * @param units    from expandUnits(); each has an id
  * @param feedback optional { plan, failed: [check labels] } from a previous
  *                 attempt, so the model can correct it
  * @param deadline ms timestamp to give up at (shared across attempts)
- * @returns { plan: [{ unit, wall, near }], ms } — throws on failure/timeout
+ * @returns { plan: [{ unit, wall, near }], ms, model } — throws when every
+ *          model failed or time ran out
  */
 export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
   const settings = aiSettings();
@@ -130,42 +211,48 @@ export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
     required: ["placements"],
   };
 
-  const started = Date.now();
-  const res = await fetch(`${settings.url}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(
-      Math.max(1, (deadline ?? started + settings.timeoutMs) - Date.now())
-    ),
-    body: JSON.stringify({
-      model: settings.model,
-      stream: false,
-      think: settings.think,
-      format,
-      keep_alive: "30m", // stay loaded between jobs
-      options: { temperature: 0.2 },
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: JSON.stringify(describe(room, units)) },
-        ...(feedback
-          ? [
-              {
-                role: "assistant",
-                content: JSON.stringify({ placements: feedback.plan }),
-              },
-              {
-                role: "user",
-                content: `The software placed that plan and these checks failed: ${feedback.failed.join("; ")}. Return a corrected plan for every unit.`,
-              },
-            ]
-          : []),
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
+  // The conversation without the system prompt; on a retry it includes the
+  // previous plan and what failed.
+  const turns = [
+    { role: "user", content: JSON.stringify(describe(room, units)) },
+    ...(feedback
+      ? [
+          {
+            role: "assistant",
+            content: JSON.stringify({ placements: feedback.plan }),
+          },
+          {
+            role: "user",
+            content: `The software placed that plan and these checks failed: ${feedback.failed.join("; ")}. Return a corrected plan for every unit.`,
+          },
+        ]
+      : []),
+  ];
 
-  const body = await res.json();
-  const placements = JSON.parse(body.message?.content ?? "{}").placements;
+  const started = Date.now();
+  const end = deadline ?? started + settings.timeoutMs;
+  const ask = settings.provider === "gemini" ? askGemini : askOllama;
+
+  // Try each model in turn. An overloaded model can hang rather than fail,
+  // so all but the last get at most MODEL_ATTEMPT_MS of the time left.
+  let reply, model, lastError;
+  for (const [i, m] of settings.models.entries()) {
+    const left = end - Date.now();
+    if (left <= 0) break;
+    const isLast = i === settings.models.length - 1;
+    try {
+      const signal = AbortSignal.timeout(isLast ? left : Math.min(left, MODEL_ATTEMPT_MS));
+      reply = await ask(settings, m, turns, format, signal);
+      model = m;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (!isLast) console.warn(`[layout] ${m} failed, trying the next model: ${shortError(err)}`);
+    }
+  }
+  if (!model) throw lastError ?? new Error("Out of time before any model answered");
+
+  const placements = JSON.parse(reply || "{}").placements;
   if (!Array.isArray(placements)) throw new Error("No placements in reply");
 
   // Keep the first valid mention of each unit; the engine places any the
@@ -180,5 +267,5 @@ export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
   );
   if (plan.length === 0) throw new Error("Plan placed no units");
 
-  return { plan, ms: Date.now() - started };
+  return { plan, ms: Date.now() - started, model };
 };
