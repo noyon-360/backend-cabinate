@@ -153,12 +153,51 @@ const sinkTargets = (room) => {
   return targets;
 };
 
+const wallLabel = (room, wallId) =>
+  wallName(room.walls.findIndex((w) => w.id === wallId));
+const skuList = (units) => [...new Set(units.map((u) => u.sku))].join(", ");
+
+// Is there a base unit on [wallId] under the point [centre]?
+const baseUnder = (items, wallId, centre) =>
+  items.some(
+    (b) =>
+      b.tier === "base" &&
+      b.wallId === wallId &&
+      b.offsetMm <= centre &&
+      centre <= b.offsetMm + b.widthMm
+  );
+
+/**
+ * Each check is { label, passed, severity } plus, when it fails, `detail`
+ * (what to change, in plain words) and `itemIndexes` (the cabinets at
+ * fault, as indexes into [items]).
+ *
+ * severity "error": a real defect (a hob with nothing under it).
+ * severity "advice": usual practice that can be broken on purpose (a wall
+ * unit over a fridge gap).
+ *
+ * Labels stay fixed: the LLM feedback and ALL_PLACED lookups match on them.
+ */
 const computeChecks = (room, items, allPlaced) => {
-  const checks = [
-    { label: ALL_PLACED, passed: allPlaced },
-    // Generation and checkLayout both refuse anything that breaks this.
-    { label: "Doors and corners kept clear", passed: true },
-  ];
+  const checks = [];
+  const add = (label, severity, passed, failing = [], detail = null) => {
+    const check = { label, passed, severity };
+    if (!passed) {
+      if (detail) check.detail = detail;
+      if (failing.length) check.itemIndexes = failing.map((i) => items.indexOf(i));
+    }
+    checks.push(check);
+  };
+
+  add(
+    ALL_PLACED,
+    "error",
+    allPlaced,
+    [],
+    "Some cabinets didn't fit on the walls. Remove some, or check the wall lengths."
+  );
+  // Generation and checkLayout both refuse anything that breaks this.
+  add("Doors and corners kept clear", "error", true);
 
   const sink = items.find(isSinkBase);
   if (sink) {
@@ -168,71 +207,83 @@ const computeChecks = (room, items, allPlaced) => {
         t.centre >= sink.offsetMm &&
         t.centre <= sink.offsetMm + sink.widthMm
     );
-    checks.push(
-      hit
-        ? { label: `Sink base under the ${hit.kind === "sink" ? "sink point" : "window"}`, passed: true }
-        : { label: "Sink base under the window or sink point", passed: false }
-    );
+    if (hit) {
+      add(`Sink base under the ${hit.kind === "sink" ? "sink point" : "window"}`, "error", true);
+    } else {
+      add(
+        "Sink base under the window or sink point",
+        "error",
+        false,
+        [sink],
+        `Move ${sink.sku} on ${wallLabel(room, sink.wallId)} so it sits under the sink point or a window.`
+      );
+    }
   }
-
-  const hobsClear = room.walls.every((wall) =>
-    wall.openings
-      .filter((o) => o.type === "hob")
-      .every((o) =>
-        items
-          .filter((i) => i.wallId === wall.id && i.tier !== "base")
-          .every((i) => !overlaps(spanOf(i), [o.offsetMm, o.offsetMm + o.widthMm]))
-      )
-  );
-  checks.push({ label: "No wall units over the hob", passed: hobsClear });
 
   const hobs = room.walls.flatMap((wall) =>
     wall.openings
       .filter((o) => o.type === "hob")
       .map((o) => ({ wallId: wall.id, from: o.offsetMm, to: o.offsetMm + o.widthMm }))
   );
+
+  const overHob = items.filter(
+    (i) =>
+      i.tier !== "base" &&
+      hobs.some((h) => h.wallId === i.wallId && overlaps(spanOf(i), [h.from, h.to]))
+  );
+  add(
+    "No wall units over the hob",
+    "error",
+    overHob.length === 0,
+    overHob,
+    `Move ${skuList(overHob)} away from the hob.`
+  );
+
   // A hob sits on a worktop, so a base unit must be under its centre.
   if (hobs.length) {
-    const supported = hobs.every((h) => {
-      const centre = (h.from + h.to) / 2;
-      return items.some(
-        (b) =>
-          b.tier === "base" &&
-          b.wallId === h.wallId &&
-          b.offsetMm <= centre &&
-          centre <= b.offsetMm + b.widthMm
-      );
-    });
-    checks.push({ label: "Base unit under the hob", passed: supported });
+    const bare = hobs.filter((h) => !baseUnder(items, h.wallId, (h.from + h.to) / 2));
+    const walls = [...new Set(bare.map((h) => wallLabel(room, h.wallId)))].join(", ");
+    add(
+      "Base unit under the hob",
+      "error",
+      bare.length === 0,
+      [],
+      `Put a base cabinet under the hob on ${walls}.`
+    );
   }
 
   const talls = items.filter((i) => i.tier === "tall");
   if (hobs.length && talls.length) {
-    const clear = talls.every((t) =>
-      hobs.every(
+    const tooClose = talls.filter((t) =>
+      hobs.some(
         (h) =>
-          h.wallId !== t.wallId ||
-          t.offsetMm >= h.to + TALL_HOB_GAP_MM ||
-          t.offsetMm + t.widthMm <= h.from - TALL_HOB_GAP_MM
+          h.wallId === t.wallId &&
+          t.offsetMm < h.to + TALL_HOB_GAP_MM &&
+          t.offsetMm + t.widthMm > h.from - TALL_HOB_GAP_MM
       )
     );
-    checks.push({ label: "Tall units kept clear of the hob", passed: clear });
+    add(
+      "Tall units kept clear of the hob",
+      "error",
+      tooClose.length === 0,
+      tooClose,
+      `Move ${skuList(tooClose)} at least ${TALL_HOB_GAP_MM} mm away from the hob.`
+    );
   }
 
   // A hung unit needs a worktop under its centre.
   const hung = items.filter((i) => i.tier === "wall");
   if (hung.length) {
-    const supported = hung.every((w) => {
-      const centre = w.offsetMm + w.widthMm / 2;
-      return items.some(
-        (b) =>
-          b.tier === "base" &&
-          b.wallId === w.wallId &&
-          b.offsetMm <= centre &&
-          centre <= b.offsetMm + b.widthMm
-      );
-    });
-    checks.push({ label: "Wall units above a worktop", passed: supported });
+    const floating = hung.filter(
+      (w) => !baseUnder(items, w.wallId, w.offsetMm + w.widthMm / 2)
+    );
+    const detail =
+      floating.length === 1
+        ? `${floating[0].sku} on ${wallLabel(room, floating[0].wallId)} has no base cabinet below it. ` +
+          "Move it over the worktop, or add a base cabinet."
+        : `${floating.length} wall cabinets (${skuList(floating)}) have no base cabinet below them. ` +
+          "Move them over the worktop, or add base cabinets.";
+    add("Wall units above a worktop", "advice", floating.length === 0, floating, detail);
   }
 
   return checks;
@@ -252,7 +303,12 @@ export const expandUnits = (products) => {
   for (const { product, quantity } of products) {
     const tier = TIER_OF[product.category];
     if (!tier) {
-      warnings.push(`${product.sku}: ${product.category} units are not placed on walls`);
+      const kind = product.category.toLowerCase();
+      const article = /^[aeiou]/.test(kind) ? "an" : "a";
+      warnings.push(
+        `${product.sku} is ${article} ${kind} cabinet, so it isn't on a wall ` +
+          "in this layout. It's still included in the estimate."
+      );
       continue;
     }
     for (let i = 0; i < quantity; i++) {
@@ -569,11 +625,15 @@ export const generateLayout = (room, products, { plan = null, engine = ENGINE } 
   };
 };
 
-/** Higher is better: fewer failed checks, then more cabinets placed. */
-export const layoutScore = (layout) => [
-  -layout.checks.filter((c) => !c.passed).length,
-  layout.items.length,
-];
+/**
+ * Higher is better: fewer failed errors, then fewer failed advice checks,
+ * then more cabinets placed. A check without severity counts as an error.
+ */
+export const layoutScore = (layout) => {
+  const failed = layout.checks.filter((c) => !c.passed);
+  const advice = failed.filter((c) => c.severity === "advice").length;
+  return [advice - failed.length, 0 - advice, layout.items.length];
+};
 
 /**
  * Re-checks a layout the user rearranged in the Design step.

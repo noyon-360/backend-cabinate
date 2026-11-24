@@ -11,7 +11,7 @@ import { roomSpans, freeBetween, ANCHORS } from "./layoutEngine.js";
 //   LAYOUT_PROVIDER             "ollama" (default), "gemini" or "cloudflare"
 //   LAYOUT_MODEL                default qwen3:8b (ollama),
 //                               gemini-flash-latest (gemini),
-//                               @cf/moonshotai/kimi-k2.7-code (cloudflare);
+//                               @cf/meta/llama-3.3-70b-instruct-fp8-fast (cloudflare);
 //                               a comma list tries the next model when one
 //                               fails (e.g. Gemini's 503 "high demand")
 //   OLLAMA_URL                  default http://localhost:11434
@@ -25,7 +25,7 @@ const PROVIDERS = ["ollama", "gemini", "cloudflare"];
 const DEFAULT_MODEL = {
   ollama: "qwen3:8b",
   gemini: "gemini-flash-latest",
-  cloudflare: "@cf/moonshotai/kimi-k2.7-code",
+  cloudflare: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 };
 
 export const aiSettings = () => {
@@ -262,12 +262,16 @@ export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
   const unitIds = units.map((u) => u.id);
   const wallIds = room.walls.map((w) => w.id);
 
-  // The schema limits ids to real ones, so the model can't invent units.
+  // The schema limits ids to real ones, so the model can't invent units, and
+  // asks for one placement per unit: without minItems some models (e.g.
+  // Llama 3.3 on Workers AI) answer with an empty, technically valid list.
   const format = {
     type: "object",
     properties: {
       placements: {
         type: "array",
+        minItems: unitIds.length,
+        maxItems: unitIds.length,
         items: {
           type: "object",
           properties: {
@@ -285,7 +289,12 @@ export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
   // The conversation without the system prompt; on a retry it includes the
   // previous plan and what failed.
   const turns = [
-    { role: "user", content: JSON.stringify(describe(room, units)) },
+    {
+      role: "user",
+      content:
+        `${JSON.stringify(describe(room, units))}\n\n` +
+        `Return exactly ${unitIds.length} placements, one for each unit id: ${unitIds.join(", ")}.`,
+    },
     ...(feedback
       ? [
           {

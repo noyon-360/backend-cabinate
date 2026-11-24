@@ -18,6 +18,7 @@ import {
 } from "../controller/job.controller.js";
 import { protect, isOwnerOrStaff } from "../middleware/auth.middleware.js";
 import upload from "../middleware/multer.middleware.js";
+import { aiLayoutLimit } from "../middleware/aiLayoutLimit.middleware.js";
 
 const router = express.Router();
 
@@ -37,7 +38,7 @@ router.delete("/:id", deleteJob);
 router.patch("/:id/room-capture", saveRoomCapture);                        // Step 2
 router.patch("/:id/measurements", saveMeasurements);                       // Step 3
 router.patch("/:id/products", saveSelectedProducts);                       // Step 4
-router.patch("/:id/ai-layout", generateAILayout);                          // Step 5
+router.patch("/:id/ai-layout", aiLayoutLimit, generateAILayout);               // Step 5
 router.patch("/:id/design", upload.single("layoutImage"), saveDesign);     // Step 6
 router.patch("/:id/estimate", saveEstimate);                               // Step 7
 router.post("/:id/proposal", generateProposal);                            // Step 8
