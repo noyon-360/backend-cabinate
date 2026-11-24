@@ -8,22 +8,31 @@ import { roomSpans, freeBetween, ANCHORS } from "./layoutEngine.js";
 //
 // Settings (.env), so switching provider or server is a config change:
 //   LAYOUT_AI=off               disable and always use the rules
-//   LAYOUT_PROVIDER             "ollama" (default) or "gemini"
+//   LAYOUT_PROVIDER             "ollama" (default), "gemini" or "cloudflare"
 //   LAYOUT_MODEL                default qwen3:8b (ollama),
-//                               gemini-flash-latest (gemini); a comma list
-//                               tries the next model when one fails
-//                               (e.g. Gemini's 503 "high demand")
+//                               gemini-flash-latest (gemini),
+//                               @cf/moonshotai/kimi-k2.7-code (cloudflare);
+//                               a comma list tries the next model when one
+//                               fails (e.g. Gemini's 503 "high demand")
 //   OLLAMA_URL                  default http://localhost:11434
 //   GEMINI_API_KEY              required for gemini
+//   CLOUDFLARE_ACCOUNT_ID       required for cloudflare (Workers AI)
+//   CLOUDFLARE_API_TOKEN        required for cloudflare (Workers AI)
 //   LAYOUT_AI_TIMEOUT_MS        default 45000 (the app waits 60 s)
 //   LAYOUT_AI_THINK=on          let qwen3 reason first (slower; ollama only)
 
+const PROVIDERS = ["ollama", "gemini", "cloudflare"];
+const DEFAULT_MODEL = {
+  ollama: "qwen3:8b",
+  gemini: "gemini-flash-latest",
+  cloudflare: "@cf/moonshotai/kimi-k2.7-code",
+};
+
 export const aiSettings = () => {
-  const provider = process.env.LAYOUT_PROVIDER === "gemini" ? "gemini" : "ollama";
-  const models = (
-    process.env.LAYOUT_MODEL ??
-    (provider === "gemini" ? "gemini-flash-latest" : "qwen3:8b")
-  )
+  const provider = PROVIDERS.includes(process.env.LAYOUT_PROVIDER)
+    ? process.env.LAYOUT_PROVIDER
+    : "ollama";
+  const models = (process.env.LAYOUT_MODEL ?? DEFAULT_MODEL[provider])
     .split(",")
     .map((m) => m.trim())
     .filter(Boolean);
@@ -71,6 +80,16 @@ export const warmUpLayoutModel = async () => {
     console.log(
       `[layout] gemini ${settings.model}` +
         (process.env.GEMINI_API_KEY ? "" : " (GEMINI_API_KEY missing)")
+    );
+    return;
+  }
+  if (settings.provider === "cloudflare") {
+    const missing = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"].filter(
+      (k) => !process.env[k]
+    );
+    console.log(
+      `[layout] cloudflare ${settings.model}` +
+        (missing.length ? ` (${missing.join(", ")} missing)` : "")
     );
     return;
   }
@@ -177,6 +196,58 @@ const askGemini = async (settings, model, turns, format, signal) => {
   return res.text;
 };
 
+// Cloudflare Workers AI. Not every model honours response_format, so the
+// schema is also spelled out in the system prompt and the reply is cleaned
+// of code fences / surrounding prose before parsing.
+const askCloudflare = async (settings, model, turns, format, signal) => {
+  const { CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: token } = process.env;
+  if (!account || !token) {
+    throw new Error("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN must be set");
+  }
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${model}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      signal,
+      body: JSON.stringify({
+        messages: [
+          {
+            role: "system",
+            content: `${SYSTEM}\n\nReply with only a JSON object matching this schema, no other text:\n${JSON.stringify(format)}`,
+          },
+          ...turns,
+        ],
+        response_format: { type: "json_schema", json_schema: format },
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+    }
+  );
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.success) {
+    const why = body?.errors?.map((e) => e.message).join("; ") || res.statusText;
+    throw new Error(`Cloudflare ${res.status}: ${why}`);
+  }
+
+  // Workers AI returns { response } for most models and an OpenAI-style
+  // { choices } for some; with JSON mode, response may already be an object.
+  const out = body.result?.response ?? body.result?.choices?.[0]?.message?.content;
+  if (out && typeof out === "object") return JSON.stringify(out);
+  return extractJson(out);
+};
+
+// The first {...} block of a reply, without ```json fences or prose.
+const extractJson = (text) => {
+  if (!text) return text;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : text;
+};
+
 /**
  * @param room     RoomSpec
  * @param units    from expandUnits(); each has an id
@@ -231,7 +302,9 @@ export const suggestPlan = async (room, units, { feedback, deadline } = {}) => {
 
   const started = Date.now();
   const end = deadline ?? started + settings.timeoutMs;
-  const ask = settings.provider === "gemini" ? askGemini : askOllama;
+  const ask = { ollama: askOllama, gemini: askGemini, cloudflare: askCloudflare }[
+    settings.provider
+  ];
 
   // Try each model in turn. An overloaded model can hang rather than fail,
   // so all but the last get at most MODEL_ATTEMPT_MS of the time left.
